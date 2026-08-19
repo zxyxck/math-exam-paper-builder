@@ -16,7 +16,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip  # 项目零依赖，无缓存命中也无妨
 
       - name: 脚本语法检查
         run: |
