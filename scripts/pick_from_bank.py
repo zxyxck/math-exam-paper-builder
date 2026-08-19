@@ -180,8 +180,9 @@ def main():
                     help='块混合配额，如 --mix 基础题:4 拓展题:1（综合题自动 = 总配额 - 其余；'
                          '不传则全部从 --block 指定块抽）')
     ap.add_argument('--topic', nargs='*', default=[],
-                    help='知识点选题，如 --topic 极限与连续:3 特征值与相似:2'
-                         '（先抽指定主题的题，其余题位按 profile 补齐；主题见 topic_tags.json）')
+                    help='知识点选题，如 --topic 极限与连续:3 特征值与相似:2，'
+                         '可限题型 --topic 一元积分:3:solve（题型 choice/blank/solve 或 选择/填空/解答）；'
+                         'topic 题替换同章同题型题位，题位不足时附加（总题数增加）；主题见 topic_tags.json')
     ap.add_argument('--tags', default=None, help='知识点标签文件（默认 bank 同目录 topic_tags.json）')
     ap.add_argument('--skip-bad', action='store_true', default=True, help='排除 LaTeX 语法坏题（默认开）')
     ap.add_argument('--no-skip-bad', dest='skip_bad', action='store_false')
@@ -224,8 +225,14 @@ def main():
     # 抽完后替换卷中同章同题型（或同题型卷末）的题位，总题数不变。
     topic = {}
     for t in args.topic:
-        name, _, n = t.partition(':')
-        topic[name] = topic.get(name, 0) + int(n)
+        parts = t.split(':')
+        name = parts[0]
+        n = int(parts[1])
+        kind = parts[2] if len(parts) > 2 else None
+        if kind is not None:
+            kind = {'选择': 'choice', '填空': 'blank', '解答': 'solve'}.get(kind, kind)
+        topic[name] = (topic.get(name, (0, None))[0] + n, kind)
+    topic_kind = {name: k for name, (_, k) in topic.items()}
     # 题库索引（topic 抽题/证明题校验用）
     bank_by_key = {}
     for q in bank:
@@ -235,7 +242,7 @@ def main():
         tags_path = args.tags or os.path.join(
             os.path.dirname(os.path.abspath(args.bank)), 'topic_tags.json')
         tags = json.load(open(tags_path, encoding='utf-8'))
-        for name, n in topic.items():
+        for name, (n, kind) in topic.items():
             cands = []
             for src in tags.get(name, []):
                 key = parse_source(src)
@@ -243,6 +250,8 @@ def main():
                     continue
                 q = bank_by_key.get(key)
                 if q is None or (args.skip_bad and is_bad(q)):
+                    continue
+                if kind is not None and key[3] != kind:
                     continue
                 cands.append((key, q))
             random.shuffle(cands)
@@ -395,6 +404,8 @@ def main():
                 if ob:
                     mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
                 picked[cand] = tk
+            else:
+                picked.append(tk)  # 该题型题位不足：附加（总题数增加）
 
     # 压轴（卷末最后一道解答题）：--mix 时从解答池抽 1 道替换之。
     # 题源：--mix 含拓展配额时取解答拓展题；否则取全部解答题（高数+线代任意块，
