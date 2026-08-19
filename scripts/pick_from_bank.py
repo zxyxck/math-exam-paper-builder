@@ -240,26 +240,27 @@ def main():
             pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
             key2blk[key] = q['block']
 
-    # 压轴候选池：全部解答拓展题（高数+线代），排除已用。
-    # 压轴题源与位置解耦：位置锚定卷末高数解答，题源可从 41 道拓展解答中选。
-    pool_ext_solve = []
+    # 压轴候选池：位置锚定卷末高数解答，题源二选一——
+    # 1) --mix 含拓展配额时：解答拓展题（高数+线代 41 道，旧语义）；
+    # 2) 否则：全部解答题（高数+线代，任意块，共 429 道）——出完为止，不限定拓展。
+    pool_ext_solve = []    # 解答拓展题候选
+    pool_final_solve = []  # 全部解答题候选
     if mix:
         for q in bank:
-            if q['block'] != '拓展题' or q['qtype'] != 'solve':
+            if q['qtype'] != 'solve':
                 continue
             if args.skip_bad and is_bad(q):
                 continue
             key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
             if key in used:
                 continue
-            pool_ext_solve.append((key, q))
+            if q['block'] == '拓展题':
+                pool_ext_solve.append((key, q))
+            pool_final_solve.append((key, q))
 
     # 抽题
     picked, missing = [], []
     proof_keys = set()  # 已抽到的证明题 key 集合
-    # 压轴（拓展题）锚点：最后一个高数解答池（卷末高数解答位置）
-    gao_solve_chs = [c for c in (profile.get('solve') or {}) if c <= 6]
-    last_gao_solve = max(gao_solve_chs) if gao_solve_chs else None
     for kind in ('choice', 'blank', 'solve'):
         cfg = profile.get(kind)
         if not cfg:
@@ -300,26 +301,10 @@ def main():
                     for k, q in cands[:n]:
                         if is_proof(q):
                             proof_keys.add(k)
-            # --mix 块配额校正：拓展题不参与普通替换（压轴由锚点池强制纳入）
+            # --mix 块配额校正：拓展题不参与普通替换（压轴在最后统一处理）
             if mix:
                 c_keys = correct_quota(c_keys, cands, n, mix, key2blk,
                                        excluded=('拓展题',))
-                if kind == 'solve':
-                    # 压轴优先：仅在最后一个高数解答池强制纳入拓展题（替换池末题，配额互换）。
-                    # 题源为全部解答拓展题（高数+线代，共 41 道），位置仍锚定卷末高数解答。
-                    if (mix.get('拓展题', 0) > 0 and ch == last_gao_solve):
-                        exts = [k for k, _ in pool_ext_solve]
-                        if exts:
-                            random.shuffle(exts)
-                        if exts:
-                            for i in range(len(c_keys) - 1, -1, -1):
-                                if key2blk.get(c_keys[i]) != '拓展题':
-                                    ob = key2blk.get(c_keys[i])
-                                    if ob:
-                                        mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
-                                    c_keys[i] = exts[0]
-                                    mix['拓展题'] -= 1
-                                    break
             if len(c_keys) < n:
                 missing.append((ch, kind, n, len(c_keys)))
             picked.extend(c_keys)
@@ -353,6 +338,26 @@ def main():
             picked.extend(got)
         print(f'[xian] 线代轮换章节: ' + '、'.join(f'第{c}章' for c in sorted(chapters)),
               '| 题型分配: ' + '、'.join(f'第{c}章-{k}' for c, k in zip(chapters, kinds)))
+
+    # 压轴（卷末最后一道解答题）：--mix 时从解答池抽 1 道替换之。
+    # 题源：--mix 含拓展配额时取解答拓展题；否则取全部解答题（高数+线代任意块，
+    #       不考虑是不是拓展题，只要是解答题就行）。位置 = 卷末最后一道解答题。
+    if mix:
+        if mix.get('拓展题', 0) > 0:
+            exts = [k for k, _ in pool_ext_solve]
+        else:
+            exts = [k for k, _ in pool_final_solve]
+        if exts:
+            random.shuffle(exts)
+            solves = [k for k in picked if k[3] == 'solve']
+            if solves:
+                last = max(solves, key=lambda k: (k[1], k[4]))
+                if last != exts[0]:
+                    ob = key2blk.get(last)
+                    if ob:
+                        mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
+                    picked[picked.index(last)] = exts[0]
+                    print(f'[final] 压轴(卷末解答): {build_source(*exts[0])}')
 
     if missing:
         print('[warn] 部分章节题数不足：', missing, file=sys.stderr)
