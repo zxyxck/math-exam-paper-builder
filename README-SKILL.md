@@ -278,6 +278,7 @@ scripts/
 ├── bank_health.py           # S3 健康体检（被 pick_from_bank import）
 ├── pick_from_bank.py        # S4 抽题
 ├── build_exam_tex.py        # S5/S6 组卷 + 编译
+├── batch_papers.py          # 一键批量组卷（自动排除已用题，循环出 N 卷）
 └── _verify_scan.py          # S8 可选完整性扫描（结构/内容/源数据质量）
 （可选）pdf_bank_parser.py   # 解析做题本 PDF 提取文本（补选项用）
 ```
@@ -366,7 +367,6 @@ python3 scripts/pick_from_bank.py question_bank.json --seed 20260819 \
 | `--mix 块:题数` | 块混合配额，可多次传（如 `--mix 基础题:4 拓展题:1`）；综合题自动 = 总配额 − 其余 |
 
 ### S4.1 重置组卷系统（清空已组卷题目记录）
-
 当用户说「重置组卷系统 / 清空已选题 / 回到未组卷状态」时，**删除所有 `selectN.json`**
 （抽题生成的**已组卷题目记录 / 跨卷排除清单**），即可清空"已选题限额"，让题库回到
 从未组过卷的状态——下一次抽题不带 `--exclude` 即全量可选，且不会与历史卷重复。
@@ -380,6 +380,20 @@ rm -f exams/*
 > 说明：`selectN.json` 是唯一的"已选题"状态载体；`question_bank.json` / `content_bad.json`
 > / 脚本 / 题库源数据均不受影响。重置后首次组卷从 `select1.json` 重新开始
 > （见 §8 移植清单与 MIGRATE.md「日常组卷命令 · 重置组卷系统」）。
+
+### S4.2 一键批量组卷（推荐）
+
+```bash
+# 从当前已有卷之后连出 3 套（自动排除所有历史卷 + content_bad.json，跨卷零重复）
+python3 scripts/batch_papers.py --papers 3 --profile 数二轮换 --mix 基础题:4
+
+# 只出 .tex 不编译 PDF；指定种子基数（每卷 seed = base + 卷号偏移，可复现）
+python3 scripts/batch_papers.py --papers 2 --seed-base 20260901 --no-pdf
+```
+
+- 自动识别已有 `select*.json`（`select.json`=卷1，`select2.json`=卷2…），从下一卷续出
+- 每卷自动携带全部历史卷作 `--exclude`，且本轮新卷自动纳入下一轮排除
+- 参数透传：`--profile` / `--mix` / `--block` / `--max-proofs` / `--no-pdf`
 
 ### S5 组卷：select → 试卷.tex
 

@@ -62,6 +62,9 @@ python3 scripts/bank_health.py question_bank.json
 # 3. 抽题（固定种子可复现）
 python3 scripts/pick_from_bank.py question_bank.json --seed 42 --no 1 -o select.json
 
+# 3.5 批量出 N 套（推荐：自动排除历史卷，跨卷零重复）
+python3 scripts/batch_papers.py --papers 3 --profile 数二轮换 --mix 基础题:4
+
 # 4. 组卷 + 编译 PDF（需安装 TeX Live，见下）
 python3 scripts/build_exam_tex.py --select select.json --bank question_bank.json -o "exams/数二模拟卷(一).tex"
 ```
@@ -106,6 +109,7 @@ sudo apt-get install -y python3 texlive-xetex texlive-lang-chinese
 │   ├── merge_banks.py           # S2 合并题库
 │   ├── bank_health.py           # S3 LaTeX 健康体检
 │   ├── pick_from_bank.py        # S4 按考纲抽题（PROFILES 在此配置）
+│   ├── batch_papers.py          # 一键批量组卷（自动排除已用题）
 │   ├── build_exam_tex.py        # S5/S6 组卷 + xelatex 编译
 │   ├── export_bank.py           # S7 人读题库导出
 │   ├── _verify_scan.py          # S8 完整性扫描
