@@ -141,22 +141,25 @@ def is_proof(q):
     return bool(PROOF_RE.search(stem))
 
 
-def correct_quota(got, cands, n, quota, key2blk):
-    """块配额校正：把 got 中「配额已耗尽块」的题替换为后续候选里配额可用的题。
+def correct_quota(got, cands, n, quota, key2blk, excluded=()):
+    """块配额校正：把 got 中「配额已耗尽 / 被 excluded 排除」的题替换为后续候选里
+    配额可用且未被排除的题。
 
     用于 --mix 混合抽题（如综合 17 + 基础 4 + 拓展 1）。无替代时保留原题（保题量优先）。
+    excluded：该阶段不允许出现的块（如拓展题只在解答题阶段开放，模拟压轴位置）。
     """
     taken = set(got)
     fixed = []
     for key in got:
         blk = key2blk.get(key)
-        if blk is not None and quota.get(blk, 0) > 0:
+        if blk is not None and blk not in excluded and quota.get(blk, 0) > 0:
             quota[blk] -= 1
             fixed.append(key)
         else:
             for k2, _ in cands:
                 b2 = key2blk.get(k2)
-                if k2 not in taken and b2 is not None and quota.get(b2, 0) > 0:
+                if (k2 not in taken and b2 is not None and b2 not in excluded
+                        and quota.get(b2, 0) > 0):
                     taken.add(k2)
                     quota[b2] -= 1
                     fixed.append(k2)
@@ -240,6 +243,9 @@ def main():
     # 抽题
     picked, missing = [], []
     proof_keys = set()  # 已抽到的证明题 key 集合
+    # 压轴（拓展题）锚点：最后一个高数解答池（卷末高数解答位置）
+    gao_solve_chs = [c for c in (profile.get('solve') or {}) if c <= 6]
+    last_gao_solve = max(gao_solve_chs) if gao_solve_chs else None
     for kind in ('choice', 'blank', 'solve'):
         cfg = profile.get(kind)
         if not cfg:
@@ -280,9 +286,24 @@ def main():
                     for k, q in cands[:n]:
                         if is_proof(q):
                             proof_keys.add(k)
-            # --mix 块配额校正（无 mix 时 quota 全在综合题，等效原逻辑）
+            # --mix 块配额校正：拓展题不参与普通替换（压轴由锚点池强制纳入）
             if mix:
-                c_keys = correct_quota(c_keys, cands, n, mix, key2blk)
+                c_keys = correct_quota(c_keys, cands, n, mix, key2blk,
+                                       excluded=('拓展题',))
+                if kind == 'solve':
+                    # 压轴优先：仅在最后一个高数解答池强制纳入拓展题（替换池末题，配额互换），
+                    # 保证每卷压轴出现在卷末高数解答位置；该池无拓展题则跳过。
+                    if (mix.get('拓展题', 0) > 0 and ch == last_gao_solve):
+                        exts = [k for k, _ in cands if key2blk.get(k) == '拓展题']
+                        if exts:
+                            for i in range(len(c_keys) - 1, -1, -1):
+                                if key2blk.get(c_keys[i]) != '拓展题':
+                                    ob = key2blk.get(c_keys[i])
+                                    if ob:
+                                        mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
+                                    c_keys[i] = exts[0]
+                                    mix['拓展题'] -= 1
+                                    break
             if len(c_keys) < n:
                 missing.append((ch, kind, n, len(c_keys)))
             picked.extend(c_keys)
@@ -308,7 +329,9 @@ def main():
             random.shuffle(cands)
             got = [k for k, _ in cands[:1]]
             if mix:
-                got = correct_quota(got, cands, 1, mix, key2blk)
+                # 线代轮换块：拓展题（压轴）只允许出现在高数解答，避免压轴固定在线代末题
+                got = correct_quota(got, cands, 1, mix, key2blk,
+                                   excluded=('拓展题',))
             if len(got) < 1:
                 missing.append((ch, kind, 1, 0))
             picked.extend(got)
