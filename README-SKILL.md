@@ -414,6 +414,18 @@ python3 scripts/pick_from_bank.py question_bank.json --profile 数二轮换 --mi
 - topic 题自动避开已用/坏题，替换入卷的**同章同题型**题位（无则同题型卷末），不改变 22 题结构与分值
 - 主题不存在或题数不足时告警，不影响其余题位；`--tags` 可换标签文件
 
+**纯知识点卷 `--topic-only`**（整张卷只由指定主题组成，不按 profile 补题）：
+
+```bash
+# 默认结构 选10+填6+解6，主题间按池容量自然混合（如 一元积分14 + 特征值8）
+python3 scripts/pick_from_bank.py question_bank.json --topic-only \
+    --topic 一元积分 特征值与相似 --seed 20260930 --no 2 -o select2.json
+
+# 指定主题比例（可再限题型）：
+python3 scripts/pick_from_bank.py question_bank.json --topic-only \
+    --topic 一元积分:11 特征值与相似:11 --no 3 -o select3.json
+```
+
 ### S5 组卷：select → 试卷.tex
 
 ```bash

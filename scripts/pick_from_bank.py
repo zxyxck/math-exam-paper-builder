@@ -183,6 +183,9 @@ def main():
                     help='知识点选题，如 --topic 极限与连续:3 特征值与相似:2，'
                          '可限题型 --topic 一元积分:3:solve（题型 choice/blank/solve 或 选择/填空/解答）；'
                          'topic 题替换同章同题型题位，题位不足时附加（总题数增加）；主题见 topic_tags.json')
+    ap.add_argument('--topic-only', action='store_true',
+                    help='纯知识点卷：整张卷只由 --topic 指定主题组成（默认结构 选10+填6+解6，'
+                         '不按 profile 补题；主题间按池容量混合，可用 --topic 主题:数量 指定比例）')
     ap.add_argument('--tags', default=None, help='知识点标签文件（默认 bank 同目录 topic_tags.json）')
     ap.add_argument('--skip-bad', action='store_true', default=True, help='排除 LaTeX 语法坏题（默认开）')
     ap.add_argument('--no-skip-bad', dest='skip_bad', action='store_false')
@@ -227,11 +230,14 @@ def main():
     for t in args.topic:
         parts = t.split(':')
         name = parts[0]
-        n = int(parts[1])
+        n = int(parts[1]) if len(parts) > 1 and parts[1] else None
         kind = parts[2] if len(parts) > 2 else None
         if kind is not None:
             kind = {'选择': 'choice', '填空': 'blank', '解答': 'solve'}.get(kind, kind)
-        topic[name] = (topic.get(name, (0, None))[0] + n, kind)
+        if name in topic and topic[name][0] is not None:
+            topic[name] = (topic[name][0] + n, kind)
+        else:
+            topic[name] = (n, kind)
     topic_kind = {name: k for name, (_, k) in topic.items()}
     # 题库索引（topic 抽题/证明题校验用）
     bank_by_key = {}
@@ -242,8 +248,10 @@ def main():
         tags_path = args.tags or os.path.join(
             os.path.dirname(os.path.abspath(args.bank)), 'topic_tags.json')
         tags = json.load(open(tags_path, encoding='utf-8'))
-        for name, (n, kind) in topic.items():
-            cands = []
+        # 主题池：name -> [(key, q)]
+        tpool = {}
+        for name in topic:
+            tpool[name] = []
             for src in tags.get(name, []):
                 key = parse_source(src)
                 if key is None or key in used:
@@ -251,37 +259,60 @@ def main():
                 q = bank_by_key.get(key)
                 if q is None or (args.skip_bad and is_bad(q)):
                     continue
-                if kind is not None and key[3] != kind:
-                    continue
-                cands.append((key, q))
+                tpool[name].append((key, q))
+
+        def pick_from(pool_list, n, kind=None):
+            cands = [x for x in pool_list if kind is None or x[0][3] == kind]
             random.shuffle(cands)
             got = [k for k, _ in cands[:n]]
             if len(got) < n:
-                missing.append((name, 'topic', n, len(got)))
-            topic_keys.extend(got)
-            used.update(got)
-            if got:
-                print('[topic] ' + '、'.join(build_source(*k) for k in got))
+                missing.append((pool_list and 'topic' or 'topic', 'topic', n, len(got)))
+            return got
 
-    # 候选池：保留题对象引用，用于证明题识别。
-    # pool[(章, 题型)] = [(key, q), ...]；key2blk[key] = 块名（供 --mix 配额校正）
-    pool = {}
-    key2blk = {}
-    for q in bank:
-        if q['block'] != args.block:
-            continue
-        if args.skip_bad and is_bad(q):
-            continue
-        key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
-        if key in used:
-            continue
-        pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
-        key2blk[key] = q['block']
+        if args.topic_only:
+            # 纯知识点卷：默认结构 选10+填6+解6；主题间按池容量混合
+            struct = {'choice': 10, 'blank': 6, 'solve': 6}
+            has_n = any(topic[name][0] is not None for name in topic)
+            if has_n:
+                # 用户指定了主题比例：逐主题按数量抽（题型不限或限定）
+                for name, (n, kind) in topic.items():
+                    got = pick_from(tpool[name], n or 0, kind)
+                    topic_keys.extend(got)
+                    used.update(got)
+                    if got:
+                        print('[topic] ' + '、'.join(build_source(*k) for k in got))
+            else:
+                # 未指定比例：合并主题池（去重）按题型抽满默认结构
+                merged, seen = [], set()
+                for name in topic:
+                    for item in tpool[name]:
+                        if item[0] not in seen:
+                            seen.add(item[0])
+                            merged.append(item)
+                for kind, n in struct.items():
+                    got = pick_from(merged, n, kind)
+                    topic_keys.extend(got)
+                    used.update(got)
+                    if got:
+                        print(f'[topic] {kind}: ' + '、'.join(build_source(*k) for k in got))
+        else:
+            # 常规模式：topic 题先抽（需显式数量），随后替换入卷
+            for name, (n, kind) in topic.items():
+                if n is None:
+                    ap.error(f'--topic {name} 需指定数量（非 --topic-only 模式）')
+                got = pick_from(tpool[name], n, kind)
+                topic_keys.extend(got)
+                used.update(got)
+                if got:
+                    print('[topic] ' + '、'.join(build_source(*k) for k in got))
 
-    # 非 --block 块的候选（--mix 混合抽题时用）：key2blk 同时记录这些块
-    if mix:
+    if not args.topic_only:
+        # 候选池：保留题对象引用，用于证明题识别。
+        # pool[(章, 题型)] = [(key, q), ...]；key2blk[key] = 块名（供 --mix 配额校正）
+        pool = {}
+        key2blk = {}
         for q in bank:
-            if q['block'] == args.block or q['block'] not in mix:
+            if q['block'] != args.block:
                 continue
             if args.skip_bad and is_bad(q):
                 continue
@@ -291,142 +322,157 @@ def main():
             pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
             key2blk[key] = q['block']
 
-    # 压轴候选池：位置锚定卷末高数解答，题源二选一——
-    # 1) --mix 含拓展配额时：解答拓展题（高数+线代 41 道，旧语义）；
-    # 2) 否则：全部解答题（高数+线代，任意块，共 429 道）——出完为止，不限定拓展。
-    pool_ext_solve = []    # 解答拓展题候选
-    pool_final_solve = []  # 全部解答题候选
-    if mix:
-        for q in bank:
-            if q['qtype'] != 'solve':
-                continue
-            if args.skip_bad and is_bad(q):
-                continue
-            key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
-            if key in used:
-                continue
-            if q['block'] == '拓展题':
-                pool_ext_solve.append((key, q))
-            pool_final_solve.append((key, q))
+        # 非 --block 块的候选（--mix 混合抽题时用）：key2blk 同时记录这些块
+        if mix:
+            for q in bank:
+                if q['block'] == args.block or q['block'] not in mix:
+                    continue
+                if args.skip_bad and is_bad(q):
+                    continue
+                key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
+                if key in used:
+                    continue
+                pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
+                key2blk[key] = q['block']
 
-    # 抽题
-    proof_keys = set()  # 已抽到的证明题 key 集合
-    for kind in ('choice', 'blank', 'solve'):
-        cfg = profile.get(kind)
-        if not cfg:
-            continue
-        for ch, n in sorted(cfg.items()):
-            if n == 0:
+        # 压轴候选池：位置锚定卷末高数解答，题源二选一——
+        # 1) --mix 含拓展配额时：解答拓展题（高数+线代 41 道，旧语义）；
+        # 2) 否则：全部解答题（高数+线代，任意块，共 429 道）——出完为止，不限定拓展。
+        pool_ext_solve = []    # 解答拓展题候选
+        pool_final_solve = []  # 全部解答题候选
+        if mix:
+            for q in bank:
+                if q['qtype'] != 'solve':
+                    continue
+                if args.skip_bad and is_bad(q):
+                    continue
+                key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
+                if key in used:
+                    continue
+                if q['block'] == '拓展题':
+                    pool_ext_solve.append((key, q))
+                pool_final_solve.append((key, q))
+
+        # 抽题
+        proof_keys = set()  # 已抽到的证明题 key 集合
+        for kind in ('choice', 'blank', 'solve'):
+            cfg = profile.get(kind)
+            if not cfg:
                 continue
-            cands = list(pool.get((ch, kind), []))
-            random.shuffle(cands)
-            if kind == 'solve' and max_proofs >= 0:
-                # 解答题：正常抽，但证明题数量受全卷上限约束。
-                # 策略：遍历 shuffle 后的候选，逐个纳入；证明题仅在配额内纳入，
-                #       超配额的证明题跳过，改用后续非证明题补位。
-                got = []
-                for key, q in cands:
-                    if len(got) >= n:
-                        break
-                    if is_proof(q):
-                        if len(proof_keys) < max_proofs:
-                            got.append(key)
-                            proof_keys.add(key)
-                        # 超配额的证明题跳过，继续找非证明题
-                    else:
-                        got.append(key)
-                # 若仍不足 n，放开配额用剩余证明题补（保题量优先）
-                if len(got) < n:
+            for ch, n in sorted(cfg.items()):
+                if n == 0:
+                    continue
+                cands = list(pool.get((ch, kind), []))
+                random.shuffle(cands)
+                if kind == 'solve' and max_proofs >= 0:
+                    # 解答题：正常抽，但证明题数量受全卷上限约束。
+                    # 策略：遍历 shuffle 后的候选，逐个纳入；证明题仅在配额内纳入，
+                    #       超配额的证明题跳过，改用后续非证明题补位。
+                    got = []
                     for key, q in cands:
                         if len(got) >= n:
                             break
-                        if key not in got and key not in proof_keys:
-                            got.append(key)
-                            if is_proof(q):
+                        if is_proof(q):
+                            if len(proof_keys) < max_proofs:
+                                got.append(key)
                                 proof_keys.add(key)
-                c_keys = got
-            else:
-                c_keys = [k for k, _ in cands[:n]]
-            # --mix 块配额校正：拓展题不参与普通替换（压轴在最后统一处理）
-            if mix:
-                c_keys = correct_quota(c_keys, cands, n, mix, key2blk,
+                            # 超配额的证明题跳过，继续找非证明题
+                        else:
+                            got.append(key)
+                    # 若仍不足 n，放开配额用剩余证明题补（保题量优先）
+                    if len(got) < n:
+                        for key, q in cands:
+                            if len(got) >= n:
+                                break
+                            if key not in got and key not in proof_keys:
+                                got.append(key)
+                                if is_proof(q):
+                                    proof_keys.add(key)
+                    c_keys = got
+                else:
+                    c_keys = [k for k, _ in cands[:n]]
+                # --mix 块配额校正：拓展题不参与普通替换（压轴在最后统一处理）
+                if mix:
+                    c_keys = correct_quota(c_keys, cands, n, mix, key2blk,
+                                           excluded=('拓展题',))
+                if len(c_keys) < n:
+                    missing.append((ch, kind, n, len(c_keys)))
+                picked.extend(c_keys)
+
+        # 线代轮换块（profile 含 "xian" 键时）：
+        # 1) 从历卷排除清单统计已覆盖过的线代章节，优先抽未覆盖章节（轮换覆盖 7~12）；
+        # 2) 每卷线代题型配额按随机顺序分配给所选章节（章节-题型对应不固定）。
+        xian = profile.get('xian')
+        if xian:
+            used_ch = {key[1] for key in used if key[0] == '线代篇'}
+            n_total = sum(n for _, n in xian['kinds'])
+            fresh = [c for c in xian['chapters'] if c not in used_ch]
+            rest = [c for c in xian['chapters'] if c in used_ch]
+            random.shuffle(fresh)
+            random.shuffle(rest)
+            chapters = (fresh + rest)[:n_total]
+            kinds = []
+            for k, n in xian['kinds']:
+                kinds += [k] * n
+            random.shuffle(kinds)
+            for ch, kind in zip(chapters, kinds):
+                cands = list(pool.get((ch, kind), []))
+                random.shuffle(cands)
+                got = [k for k, _ in cands[:1]]
+                if mix:
+                    # 线代轮换块：拓展题（压轴）只允许出现在高数解答，避免压轴固定在线代末题
+                    got = correct_quota(got, cands, 1, mix, key2blk,
                                        excluded=('拓展题',))
-            if len(c_keys) < n:
-                missing.append((ch, kind, n, len(c_keys)))
-            picked.extend(c_keys)
+                if len(got) < 1:
+                    missing.append((ch, kind, 1, 0))
+                picked.extend(got)
+            print(f'[xian] 线代轮换章节: ' + '、'.join(f'第{c}章' for c in sorted(chapters)),
+                  '| 题型分配: ' + '、'.join(f'第{c}章-{k}' for c, k in zip(chapters, kinds)))
 
-    # 线代轮换块（profile 含 "xian" 键时）：
-    # 1) 从历卷排除清单统计已覆盖过的线代章节，优先抽未覆盖章节（轮换覆盖 7~12）；
-    # 2) 每卷线代题型配额按随机顺序分配给所选章节（章节-题型对应不固定）。
-    xian = profile.get('xian')
-    if xian:
-        used_ch = {key[1] for key in used if key[0] == '线代篇'}
-        n_total = sum(n for _, n in xian['kinds'])
-        fresh = [c for c in xian['chapters'] if c not in used_ch]
-        rest = [c for c in xian['chapters'] if c in used_ch]
-        random.shuffle(fresh)
-        random.shuffle(rest)
-        chapters = (fresh + rest)[:n_total]
-        kinds = []
-        for k, n in xian['kinds']:
-            kinds += [k] * n
-        random.shuffle(kinds)
-        for ch, kind in zip(chapters, kinds):
-            cands = list(pool.get((ch, kind), []))
-            random.shuffle(cands)
-            got = [k for k, _ in cands[:1]]
-            if mix:
-                # 线代轮换块：拓展题（压轴）只允许出现在高数解答，避免压轴固定在线代末题
-                got = correct_quota(got, cands, 1, mix, key2blk,
-                                   excluded=('拓展题',))
-            if len(got) < 1:
-                missing.append((ch, kind, 1, 0))
-            picked.extend(got)
-        print(f'[xian] 线代轮换章节: ' + '、'.join(f'第{c}章' for c in sorted(chapters)),
-              '| 题型分配: ' + '、'.join(f'第{c}章-{k}' for c, k in zip(chapters, kinds)))
-
-    # --topic 题归位：替换卷中「同章同题型」的题位（无则同题型卷末），
-    # 被替换题归还块配额；总题数保持 total_quota。
-    if topic_keys:
-        for tk in topic_keys:
-            cand = None
-            for i, k in enumerate(picked):
-                if k[3] == tk[3] and k[1] == tk[1] and k not in topic_keys:
-                    cand = i
-                    break
-            if cand is None:
-                for i in range(len(picked) - 1, -1, -1):
-                    if picked[i][3] == tk[3] and picked[i] not in topic_keys:
+        # --topic 题归位：替换卷中「同章同题型」的题位（无则同题型卷末），
+        # 被替换题归还块配额；总题数保持 total_quota。
+        if topic_keys:
+            for tk in topic_keys:
+                cand = None
+                for i, k in enumerate(picked):
+                    if k[3] == tk[3] and k[1] == tk[1] and k not in topic_keys:
                         cand = i
                         break
-            if cand is not None:
-                ob = key2blk.get(picked[cand])
-                if ob:
-                    mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
-                picked[cand] = tk
-            else:
-                picked.append(tk)  # 该题型题位不足：附加（总题数增加）
-
-    # 压轴（卷末最后一道解答题）：--mix 时从解答池抽 1 道替换之。
-    # 题源：--mix 含拓展配额时取解答拓展题；否则取全部解答题（高数+线代任意块，
-    #       不考虑是不是拓展题，只要是解答题就行）。位置 = 卷末最后一道解答题。
-    if mix:
-        if mix.get('拓展题', 0) > 0:
-            exts = [k for k, _ in pool_ext_solve]
-        else:
-            exts = [k for k, _ in pool_final_solve]
-        if exts:
-            random.shuffle(exts)
-            solves = [k for k in picked if k[3] == 'solve' and k not in topic_keys]
-            if solves:
-                last = max(solves, key=lambda k: (k[1], k[4]))
-                if last != exts[0]:
-                    ob = key2blk.get(last)
+                if cand is None:
+                    for i in range(len(picked) - 1, -1, -1):
+                        if picked[i][3] == tk[3] and picked[i] not in topic_keys:
+                            cand = i
+                            break
+                if cand is not None:
+                    ob = key2blk.get(picked[cand])
                     if ob:
                         mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
-                    picked[picked.index(last)] = exts[0]
-                    print(f'[final] 压轴(卷末解答): {build_source(*exts[0])}')
+                    picked[cand] = tk
+                else:
+                    picked.append(tk)  # 该题型题位不足：附加（总题数增加）
 
+        # 压轴（卷末最后一道解答题）：--mix 时从解答池抽 1 道替换之。
+        # 题源：--mix 含拓展配额时取解答拓展题；否则取全部解答题（高数+线代任意块，
+        #       不考虑是不是拓展题，只要是解答题就行）。位置 = 卷末最后一道解答题。
+        if mix:
+            if mix.get('拓展题', 0) > 0:
+                exts = [k for k, _ in pool_ext_solve]
+            else:
+                exts = [k for k, _ in pool_final_solve]
+            if exts:
+                random.shuffle(exts)
+                solves = [k for k in picked if k[3] == 'solve' and k not in topic_keys]
+                if solves:
+                    last = max(solves, key=lambda k: (k[1], k[4]))
+                    if last != exts[0]:
+                        ob = key2blk.get(last)
+                        if ob:
+                            mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
+                        picked[picked.index(last)] = exts[0]
+                        print(f'[final] 压轴(卷末解答): {build_source(*exts[0])}')
+
+    else:
+        picked.extend(topic_keys)  # 纯知识点卷：topic 题即全部题目
     if missing:
         print('[warn] 部分章节题数不足：', missing, file=sys.stderr)
     if not picked:
