@@ -73,6 +73,21 @@ PROFILES = {
         "blank":  {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1},   # 共 6
         "solve":  {1: 1, 2: 1, 3: 1, 5: 1, 6: 1},         # 共 5
     },
+    # 「数二轮换」profile：不强求对齐真题格式。
+    # 高数固定 17 题（选择 7 + 填空 5 + 解答 5）占大头；
+    # 线代 5 题（选择 3 + 填空 1 + 解答 1）在 7~12 章之间轮换：
+    #   优先抽「未被历卷覆盖过的章节」，配额不足时再补已用章节，保证多卷覆盖所有线代章；
+    #   每卷线代各章的题型分配随机（哪章出选择/填空/解答不固定）。
+    "数二轮换": {
+        "title": "数学（二）模拟试卷",
+        "score_total": 150, "time": 180,
+        "choice": {1: 1, 2: 2, 3: 1, 4: 1, 5: 1, 6: 1},   # 高数 7
+        "blank":  {1: 1, 2: 1, 3: 1, 5: 1, 6: 1},          # 高数 5
+        "solve":  {1: 1, 2: 1, 3: 1, 5: 1, 6: 1},          # 高数 5
+        # 线代轮换块：chapters 为轮换池，kinds 为题型配额（总数=每卷线代题数）
+        "xian": {"chapters": [7, 8, 9, 10, 11, 12],
+                  "kinds": [("choice", 3), ("blank", 1), ("solve", 1)]},
+    },
 }
 
 SEC_DESC = {
@@ -209,6 +224,32 @@ def main():
             if len(c_keys) < n:
                 missing.append((ch, kind, n, len(c_keys)))
             picked.extend(c_keys)
+
+    # 线代轮换块（profile 含 "xian" 键时）：
+    # 1) 从历卷排除清单统计已覆盖过的线代章节，优先抽未覆盖章节（轮换覆盖 7~12）；
+    # 2) 每卷线代题型配额按随机顺序分配给所选章节（章节-题型对应不固定）。
+    xian = profile.get('xian')
+    if xian:
+        used_ch = {key[1] for key in used if key[0] == '线代篇'}
+        n_total = sum(n for _, n in xian['kinds'])
+        fresh = [c for c in xian['chapters'] if c not in used_ch]
+        rest = [c for c in xian['chapters'] if c in used_ch]
+        random.shuffle(fresh)
+        random.shuffle(rest)
+        chapters = (fresh + rest)[:n_total]
+        kinds = []
+        for k, n in xian['kinds']:
+            kinds += [k] * n
+        random.shuffle(kinds)
+        for ch, kind in zip(chapters, kinds):
+            cands = list(pool.get((ch, kind), []))
+            random.shuffle(cands)
+            got = [k for k, _ in cands[:1]]
+            if len(got) < 1:
+                missing.append((ch, kind, 1, 0))
+            picked.extend(got)
+        print(f'[xian] 线代轮换章节: ' + '、'.join(f'第{c}章' for c in sorted(chapters)),
+              '| 题型分配: ' + '、'.join(f'第{c}章-{k}' for c, k in zip(chapters, kinds)))
 
     if missing:
         print('[warn] 部分章节题数不足：', missing, file=sys.stderr)
