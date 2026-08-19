@@ -240,6 +240,20 @@ def main():
             pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
             key2blk[key] = q['block']
 
+    # 压轴候选池：全部解答拓展题（高数+线代），排除已用。
+    # 压轴题源与位置解耦：位置锚定卷末高数解答，题源可从 41 道拓展解答中选。
+    pool_ext_solve = []
+    if mix:
+        for q in bank:
+            if q['block'] != '拓展题' or q['qtype'] != 'solve':
+                continue
+            if args.skip_bad and is_bad(q):
+                continue
+            key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
+            if key in used:
+                continue
+            pool_ext_solve.append((key, q))
+
     # 抽题
     picked, missing = [], []
     proof_keys = set()  # 已抽到的证明题 key 集合
@@ -291,10 +305,12 @@ def main():
                 c_keys = correct_quota(c_keys, cands, n, mix, key2blk,
                                        excluded=('拓展题',))
                 if kind == 'solve':
-                    # 压轴优先：仅在最后一个高数解答池强制纳入拓展题（替换池末题，配额互换），
-                    # 保证每卷压轴出现在卷末高数解答位置；该池无拓展题则跳过。
+                    # 压轴优先：仅在最后一个高数解答池强制纳入拓展题（替换池末题，配额互换）。
+                    # 题源为全部解答拓展题（高数+线代，共 41 道），位置仍锚定卷末高数解答。
                     if (mix.get('拓展题', 0) > 0 and ch == last_gao_solve):
-                        exts = [k for k, _ in cands if key2blk.get(k) == '拓展题']
+                        exts = [k for k, _ in pool_ext_solve]
+                        if exts:
+                            random.shuffle(exts)
                         if exts:
                             for i in range(len(c_keys) - 1, -1, -1):
                                 if key2blk.get(c_keys[i]) != '拓展题':
