@@ -20,6 +20,7 @@ import os
 import random
 import re
 import sys
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bank_health import is_bad
@@ -140,6 +141,31 @@ def is_proof(q):
     return bool(PROOF_RE.search(stem))
 
 
+def correct_quota(got, cands, n, quota, key2blk):
+    """块配额校正：把 got 中「配额已耗尽块」的题替换为后续候选里配额可用的题。
+
+    用于 --mix 混合抽题（如综合 17 + 基础 4 + 拓展 1）。无替代时保留原题（保题量优先）。
+    """
+    taken = set(got)
+    fixed = []
+    for key in got:
+        blk = key2blk.get(key)
+        if blk is not None and quota.get(blk, 0) > 0:
+            quota[blk] -= 1
+            fixed.append(key)
+        else:
+            for k2, _ in cands:
+                b2 = key2blk.get(k2)
+                if k2 not in taken and b2 is not None and quota.get(b2, 0) > 0:
+                    taken.add(k2)
+                    quota[b2] -= 1
+                    fixed.append(k2)
+                    break
+            else:
+                fixed.append(key)  # 无可用替代：保留原题
+    return fixed[:n]
+
+
 def main():
     ap = argparse.ArgumentParser(description='按考纲 profile 从题库抽题')
     ap.add_argument('bank', help='question_bank.json 路径')
@@ -147,6 +173,9 @@ def main():
     ap.add_argument('--seed', type=int, default=None, help='随机种子，固定后结果可复现')
     ap.add_argument('--exclude', action='append', default=[], help='排除清单（selectN.json），可多次传入')
     ap.add_argument('--block', default='综合题', help='抽题块：综合题 / 基础题 / 拓展题')
+    ap.add_argument('--mix', nargs='*', default=[],
+                    help='块混合配额，如 --mix 基础题:4 拓展题:1（综合题自动 = 总配额 - 其余；'
+                         '不传则全部从 --block 指定块抽）')
     ap.add_argument('--skip-bad', action='store_true', default=True, help='排除 LaTeX 语法坏题（默认开）')
     ap.add_argument('--no-skip-bad', dest='skip_bad', action='store_false')
     ap.add_argument('-o', '--output', required=True)
@@ -165,9 +194,25 @@ def main():
     used = collect_excluded(args.exclude)
     max_proofs = args.max_proofs
 
+    # --mix 块配额：{'基础题': 4, '拓展题': 1}；综合题配额自动 = 总配额 - 其余。
+    # 总配额 = profile 各题型题数之和 + 线代轮换题数（若有）。
+    mix = {}
+    for m in args.mix:
+        blk, _, n = m.partition(':')
+        if blk not in ('基础题', '综合题', '拓展题'):
+            ap.error(f'--mix 块名必须是 基础题/综合题/拓展题: {m}')
+        mix[blk] = mix.get(blk, 0) + int(n)
+    total_quota = sum(sum(cfg.values()) for cfg in
+                      (profile.get(k) for k in ('choice', 'blank', 'solve')) if cfg)
+    xian_cfg = profile.get('xian')
+    if xian_cfg:
+        total_quota += sum(n for _, n in xian_cfg['kinds'])
+    mix.setdefault('综合题', max(0, total_quota - sum(mix.values())))
+
     # 候选池：保留题对象引用，用于证明题识别。
-    # pool[(章, 题型)] = [(key, q), ...]
+    # pool[(章, 题型)] = [(key, q), ...]；key2blk[key] = 块名（供 --mix 配额校正）
     pool = {}
+    key2blk = {}
     for q in bank:
         if q['block'] != args.block:
             continue
@@ -177,6 +222,20 @@ def main():
         if key in used:
             continue
         pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
+        key2blk[key] = q['block']
+
+    # 非 --block 块的候选（--mix 混合抽题时用）：key2blk 同时记录这些块
+    if mix:
+        for q in bank:
+            if q['block'] == args.block or q['block'] not in mix:
+                continue
+            if args.skip_bad and is_bad(q):
+                continue
+            key = (q['book'], q['chapter'], q['block'], q['qtype'], q['num'])
+            if key in used:
+                continue
+            pool.setdefault((q['chapter'], q['qtype']), []).append((key, q))
+            key2blk[key] = q['block']
 
     # 抽题
     picked, missing = [], []
@@ -221,6 +280,9 @@ def main():
                     for k, q in cands[:n]:
                         if is_proof(q):
                             proof_keys.add(k)
+            # --mix 块配额校正（无 mix 时 quota 全在综合题，等效原逻辑）
+            if mix:
+                c_keys = correct_quota(c_keys, cands, n, mix, key2blk)
             if len(c_keys) < n:
                 missing.append((ch, kind, n, len(c_keys)))
             picked.extend(c_keys)
@@ -245,6 +307,8 @@ def main():
             cands = list(pool.get((ch, kind), []))
             random.shuffle(cands)
             got = [k for k, _ in cands[:1]]
+            if mix:
+                got = correct_quota(got, cands, 1, mix, key2blk)
             if len(got) < 1:
                 missing.append((ch, kind, 1, 0))
             picked.extend(got)
@@ -264,6 +328,11 @@ def main():
     if max_proofs >= 0 and n_proofs > max_proofs:
         print(f'[warn] 证明题 {n_proofs} 道，超过上限 {max_proofs}，请检查题库或扩大候选', file=sys.stderr)
     print(f'[proof] 本卷证明题 {n_proofs} 道（上限 {max_proofs if max_proofs >= 0 else "不限"}）')
+
+    # 块分布统计（--mix 混合抽题时直观确认）
+    blk_cnt = Counter(q['block'] for q in picked_qs)
+    if mix:
+        print('[mix] 块分布: ' + '、'.join(f'{b} {n} 题' for b, n in blk_cnt.items()))
 
     # 组装 select.json
     cn_no = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
