@@ -55,13 +55,15 @@ jobs:
           test -s exams/试卷.tex
           grep -q "高数·一·综合" exams/试卷.tex  # 题号索引
 
-      - name: S6 编译 PDF（缺 xelatex 则安装 TeX Live）
+      - name: S6 编译 PDF（TinyTeX 极简工具，~100MB，按需装包）
         run: |
           if ! command -v xelatex >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq texlive-xetex texlive-lang-chinese
+            wget -qO- "https://yihui.org/tinytex/install-bin-unix.sh" | sh
+            export PATH="$HOME/.TinyTeX/bin/x86_64-linux:$PATH"
+            tlmgr install ctex enumitem fancyhdr >/dev/null   # fandol 已自带
+            mktexlsr
           fi
-          kpsewhich fandol-song-clm.otf || sudo apt-get install -y -qq fonts-fandol || true
+          kpsewhich ctexart.cls && kpsewhich FandolSong-Regular.otf
           cd exams
           xelatex -interaction=nonstopmode -halt-on-error "试卷.tex" >/dev/null 2>&1
           xelatex -interaction=nonstopmode -halt-on-error "试卷.tex" >/dev/null 2>&1

@@ -1,0 +1,44 @@
+name: paper-build
+
+on:
+  push:
+    branches: ['paper-*']
+
+jobs:
+  build:
+    name: 编译 exams/*.tex → PDF
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 TinyTeX 极简工具（~100MB，按需装包）
+        run: |
+          if ! command -v xelatex >/dev/null; then
+            wget -qO- "https://yihui.org/tinytex/install-bin-unix.sh" | sh
+            export PATH="$HOME/.TinyTeX/bin/x86_64-linux:$PATH"
+            tlmgr install ctex enumitem fancyhdr >/dev/null   # fandol 已自带
+            mktexlsr
+          fi
+          kpsewhich ctexart.cls && kpsewhich FandolSong-Regular.otf
+
+      - name: 编译试卷（xelatex ×2）
+        run: |
+          set -e
+          export PATH="$HOME/.TinyTeX/bin/x86_64-linux:$PATH"
+          ls exams/*.tex
+          for f in exams/*.tex; do
+            cd exams
+            xelatex -interaction=nonstopmode -halt-on-error "$(basename "$f")" >/dev/null 2>&1
+            xelatex -interaction=nonstopmode -halt-on-error "$(basename "$f")" >/dev/null 2>&1
+            cd ..
+          done
+          ls -la exams/*.pdf
+
+      - name: 上传 PDF + .tex
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-pdf
+          path: |
+            exams/*.pdf
+            exams/*.tex
+          if-no-files-found: error
