@@ -1,0 +1,20 @@
+# 题库与源数据（版权内容，不入库）
+question_bank.json
+content_bad.json
+source/
+
+# 人读导出（可由 export_bank.py 重新生成）
+bank_md/
+
+# 组卷产物
+select*.json
+exams/*
+!exams/.gitkeep
+
+# 验证报告（本机记录，不入库）
+verify_report.md
+
+# 系统文件
+.DS_Store
+__pycache__/
+*.pyc
