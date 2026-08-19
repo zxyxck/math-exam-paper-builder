@@ -285,7 +285,7 @@ def main():
                         # 超配额的证明题跳过，继续找非证明题
                     else:
                         got.append(key)
-                # 若非证明题+配额内证明题仍不足 n，放开配额用剩余证明题补（保题量优先）
+                # 若仍不足 n，放开配额用剩余证明题补（保题量优先）
                 if len(got) < n:
                     for key, q in cands:
                         if len(got) >= n:
@@ -297,10 +297,6 @@ def main():
                 c_keys = got
             else:
                 c_keys = [k for k, _ in cands[:n]]
-                if kind == 'solve':
-                    for k, q in cands[:n]:
-                        if is_proof(q):
-                            proof_keys.add(k)
             # --mix 块配额校正：拓展题不参与普通替换（压轴在最后统一处理）
             if mix:
                 c_keys = correct_quota(c_keys, cands, n, mix, key2blk,
@@ -390,7 +386,7 @@ def main():
                        'score': 12 if kind == 'solve' else 5,
                        'chapter': key[1], 'block': key[2],
                        'qtype': QTYPE_CN[kind], 'num': key[4],
-                       'source': build_source(*key), '考点': key[2]})
+                       'source': build_source(*key)})
             i += 1
 
     sel = {

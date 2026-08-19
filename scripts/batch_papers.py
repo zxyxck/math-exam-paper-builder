@@ -11,7 +11,7 @@ batch_papers.py — 一键批量组卷：循环出 N 卷，自动排除已用题
   python3 scripts/batch_papers.py --papers 2 --seed-base 20260901 --no-pdf
 
 特性:
-  - 自动识别已有 select*.json（select.json = 卷1，select2.json = 卷2…），从下一卷续出
+  - 自动识别已有 select*.json（select1.json、select2.json…），从下一卷续出
   - 每卷自动携带全部历史卷作 --exclude（跨卷零重复）
   - 生成 selectN.json + exams/数二模拟卷(N)_LaTeX.tex + .pdf
   - 全部参数透传 pick_from_bank.py / build_exam_tex.py（--profile / --mix / --block / --max-proofs）
@@ -33,13 +33,12 @@ CN_NO = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '
 
 
 def existing_papers():
-    """已有卷号列表：select.json=1, select2.json=2, ..."""
+    """已有卷号列表：select1.json=1, select2.json=2, ..."""
     nums = []
     for f in glob.glob(os.path.join(WORKDIR, 'select*.json')):
-        base = os.path.basename(f)
-        m = re.match(r'select(\d*)\.json$', base)
+        m = re.match(r'select(\d+)\.json$', os.path.basename(f))
         if m:
-            nums.append(int(m.group(1) or 1))
+            nums.append(int(m.group(1)))
     return sorted(nums)
 
 
@@ -70,7 +69,7 @@ def main():
 
     for i in range(args.papers):
         no = start + i
-        sel = 'select.json' if no == 1 else f'select{no}.json'
+        sel = f'select{no}.json'
         seed = args.seed_base + (no - 1)
 
         # 排除清单：content_bad + 全部历史卷
@@ -78,7 +77,7 @@ def main():
         if os.path.exists(BAD):
             excludes.append(BAD)
         for n in existing_papers():
-            f = 'select.json' if n == 1 else f'select{n}.json'
+            f = f'select{n}.json'
             if os.path.exists(os.path.join(WORKDIR, f)):
                 excludes.append(f)
 

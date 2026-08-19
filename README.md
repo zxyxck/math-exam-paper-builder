@@ -60,13 +60,13 @@ python3 scripts/merge_banks.py bank/ -o question_bank.json
 python3 scripts/bank_health.py question_bank.json
 
 # 3. 抽题（固定种子可复现）
-python3 scripts/pick_from_bank.py question_bank.json --seed 42 --no 1 -o select.json
+python3 scripts/pick_from_bank.py question_bank.json --seed 42 --no 1 -o select1.json
 
 # 3.5 批量出 N 套（推荐：自动排除历史卷，跨卷零重复）
 python3 scripts/batch_papers.py --papers 3 --profile 数二轮换 --mix 基础题:4
 
 # 4. 组卷 + 编译 PDF（需安装 TeX Live，见下）
-python3 scripts/build_exam_tex.py --select select.json --bank question_bank.json -o "exams/数二模拟卷(一).tex"
+python3 scripts/build_exam_tex.py --select select1.json --bank question_bank.json -o "exams/数二模拟卷(一).tex"
 ```
 
 > 没有 xelatex 时用 `--no-pdf` 只生成 `.tex` 源文件。
