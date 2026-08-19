@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""题目完整性验证（完整版）：输出结构、内容、源数据质量三类报告"""
-import json, re
+"""题目完整性验证（完整版）：输出结构、内容、源数据质量三类报告
+
+用法:
+  python _verify_scan.py [question_bank.json]
+"""
+import json, re, sys
 from collections import Counter
-bank = json.load(open('/workspace/question_bank.json', encoding='utf-8'))['questions']
+path = sys.argv[1] if len(sys.argv) > 1 else 'question_bank.json'
+bank = json.load(open(path, encoding='utf-8'))['questions']
 N = len(bank)
 R = []  # 报告行
 

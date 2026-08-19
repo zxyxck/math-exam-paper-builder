@@ -1,0 +1,79 @@
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    name: S1解析 → S2合并 → S3体检 → S4抽题 → S5/S6组卷PDF
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip  # 项目零依赖，无缓存命中也无妨
+
+      - name: 脚本语法检查
+        run: |
+          python3 -m py_compile scripts/*.py
+          python3 scripts/bank_health.py --help >/dev/null 2>&1 || true
+          python3 scripts/pick_from_bank.py --help >/dev/null 2>&1 || true
+          python3 scripts/build_exam_tex.py --help >/dev/null 2>&1 || true
+          echo "syntax OK"
+
+      - name: S1 解析样例题库（高数篇 第1章 / 线代篇 第7章）
+        run: |
+          mkdir -p bank
+          python3 scripts/parse_question_bank.py "sample/高数篇_第一章.md" --book 高数篇 -o bank/ch1.json
+          python3 scripts/parse_question_bank.py "sample/线代篇_第七章.md" --book 线代篇 -o bank/ch7.json
+
+      - name: S2 合并 → question_bank.json
+        run: python3 scripts/merge_banks.py bank/ -o question_bank.json
+
+      - name: S3 健康体检（期望 0 坏题）
+        run: |
+          python3 scripts/bank_health.py question_bank.json
+          test "$(python3 scripts/bank_health.py question_bank.json | grep -o '坏题数: [0-9]*' | cut -d' ' -f2)" = "0"
+
+      - name: S3.5 完整性扫描（期望全 0）
+        run: |
+          python3 scripts/_verify_scan.py question_bank.json
+          python3 scripts/_verify_scan.py question_bank.json | grep -q "字段缺失 0 | 空题干 0 | 题号缺口 0 | 重复 0"
+
+      - name: S4 抽题（固定种子，可复现）
+        run: |
+          python3 scripts/pick_from_bank.py question_bank.json --seed 42 --no 1 -o select.json
+          test -s select.json
+
+      - name: S5 组卷 .tex（无 PDF 阶段，快）
+        run: |
+          python3 scripts/build_exam_tex.py --select select.json --bank question_bank.json --no-pdf -o exams/试卷.tex
+          test -s exams/试卷.tex
+          grep -q "高数·一·综合" exams/试卷.tex  # 题号索引
+
+      - name: S6 编译 PDF（缺 xelatex 则安装 TeX Live）
+        run: |
+          if ! command -v xelatex >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq texlive-xetex texlive-lang-chinese
+          fi
+          kpsewhich fandol-song-clm.otf || sudo apt-get install -y -qq fonts-fandol || true
+          cd exams
+          xelatex -interaction=nonstopmode -halt-on-error "试卷.tex" >/dev/null 2>&1
+          xelatex -interaction=nonstopmode -halt-on-error "试卷.tex" >/dev/null 2>&1
+          cd ..
+          test -s exams/试卷.pdf && echo "PDF OK: $(du -h exams/试卷.pdf | cut -f1)"
+
+      - name: 上传试卷产物（可下载查看）
+        uses: actions/upload-artifact@v4
+        with:
+          name: sample-exam
+          path: |
+            exams/试卷.pdf
+            exams/试卷.tex
+          if-no-files-found: error
