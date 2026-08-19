@@ -179,6 +179,10 @@ def main():
     ap.add_argument('--mix', nargs='*', default=[],
                     help='块混合配额，如 --mix 基础题:4 拓展题:1（综合题自动 = 总配额 - 其余；'
                          '不传则全部从 --block 指定块抽）')
+    ap.add_argument('--topic', nargs='*', default=[],
+                    help='知识点选题，如 --topic 极限与连续:3 特征值与相似:2'
+                         '（先抽指定主题的题，其余题位按 profile 补齐；主题见 topic_tags.json）')
+    ap.add_argument('--tags', default=None, help='知识点标签文件（默认 bank 同目录 topic_tags.json）')
     ap.add_argument('--skip-bad', action='store_true', default=True, help='排除 LaTeX 语法坏题（默认开）')
     ap.add_argument('--no-skip-bad', dest='skip_bad', action='store_false')
     ap.add_argument('-o', '--output', required=True)
@@ -211,6 +215,44 @@ def main():
     if xian_cfg:
         total_quota += sum(n for _, n in xian_cfg['kinds'])
     mix.setdefault('综合题', max(0, total_quota - sum(mix.values())))
+
+    # 抽题结果容器（profile/xian/压轴 抽满 total_quota，topic 题随后替换入位）
+    picked, missing = [], []
+
+    # --topic 知识点选题：{'极限与连续': 3, '特征值与相似': 2}
+    # topic 题先抽（自动避开已用/坏题）并计入 used，profile 不再抽到它们；
+    # 抽完后替换卷中同章同题型（或同题型卷末）的题位，总题数不变。
+    topic = {}
+    for t in args.topic:
+        name, _, n = t.partition(':')
+        topic[name] = topic.get(name, 0) + int(n)
+    # 题库索引（topic 抽题/证明题校验用）
+    bank_by_key = {}
+    for q in bank:
+        bank_by_key[(q['book'], q['chapter'], q['block'], q['qtype'], q['num'])] = q
+    topic_keys = []
+    if topic:
+        tags_path = args.tags or os.path.join(
+            os.path.dirname(os.path.abspath(args.bank)), 'topic_tags.json')
+        tags = json.load(open(tags_path, encoding='utf-8'))
+        for name, n in topic.items():
+            cands = []
+            for src in tags.get(name, []):
+                key = parse_source(src)
+                if key is None or key in used:
+                    continue
+                q = bank_by_key.get(key)
+                if q is None or (args.skip_bad and is_bad(q)):
+                    continue
+                cands.append((key, q))
+            random.shuffle(cands)
+            got = [k for k, _ in cands[:n]]
+            if len(got) < n:
+                missing.append((name, 'topic', n, len(got)))
+            topic_keys.extend(got)
+            used.update(got)
+            if got:
+                print('[topic] ' + '、'.join(build_source(*k) for k in got))
 
     # 候选池：保留题对象引用，用于证明题识别。
     # pool[(章, 题型)] = [(key, q), ...]；key2blk[key] = 块名（供 --mix 配额校正）
@@ -259,7 +301,6 @@ def main():
             pool_final_solve.append((key, q))
 
     # 抽题
-    picked, missing = [], []
     proof_keys = set()  # 已抽到的证明题 key 集合
     for kind in ('choice', 'blank', 'solve'):
         cfg = profile.get(kind)
@@ -335,6 +376,26 @@ def main():
         print(f'[xian] 线代轮换章节: ' + '、'.join(f'第{c}章' for c in sorted(chapters)),
               '| 题型分配: ' + '、'.join(f'第{c}章-{k}' for c, k in zip(chapters, kinds)))
 
+    # --topic 题归位：替换卷中「同章同题型」的题位（无则同题型卷末），
+    # 被替换题归还块配额；总题数保持 total_quota。
+    if topic_keys:
+        for tk in topic_keys:
+            cand = None
+            for i, k in enumerate(picked):
+                if k[3] == tk[3] and k[1] == tk[1] and k not in topic_keys:
+                    cand = i
+                    break
+            if cand is None:
+                for i in range(len(picked) - 1, -1, -1):
+                    if picked[i][3] == tk[3] and picked[i] not in topic_keys:
+                        cand = i
+                        break
+            if cand is not None:
+                ob = key2blk.get(picked[cand])
+                if ob:
+                    mix[ob] = mix.get(ob, 0) + 1  # 归还被替换题的配额
+                picked[cand] = tk
+
     # 压轴（卷末最后一道解答题）：--mix 时从解答池抽 1 道替换之。
     # 题源：--mix 含拓展配额时取解答拓展题；否则取全部解答题（高数+线代任意块，
     #       不考虑是不是拓展题，只要是解答题就行）。位置 = 卷末最后一道解答题。
@@ -345,7 +406,7 @@ def main():
             exts = [k for k, _ in pool_final_solve]
         if exts:
             random.shuffle(exts)
-            solves = [k for k in picked if k[3] == 'solve']
+            solves = [k for k in picked if k[3] == 'solve' and k not in topic_keys]
             if solves:
                 last = max(solves, key=lambda k: (k[1], k[4]))
                 if last != exts[0]:

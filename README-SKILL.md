@@ -365,6 +365,8 @@ python3 scripts/pick_from_bank.py question_bank.json --seed 20260819 \
 | `--profile` | 考纲 profile，默认 `数二标准`，另有 `数二真题`（高数 80%/线代 21.3%）、`高数全` |
 | `--max-proofs N` | 同一试卷证明题数量上限（默认 2，对齐考研数二真题约束）。设 0 禁止，负数不限 |
 | `--mix 块:题数` | 块混合配额，可多次传（如 `--mix 基础题:4 拓展题:1`）；综合题自动 = 总配额 − 其余 |
+| `--topic 主题:题数` | 知识点选题，可多次传（如 `--topic 极限与连续:3 特征值与相似:2`）；先抽指定主题题并替换入卷（同章同题型位置），其余按 profile 补齐，总题数不变 |
+| `--tags 文件` | 知识点标签文件（默认 bank 同目录 `topic_tags.json`，由 `tag_bank.py` 生成） |
 
 ### S4.1 重置组卷系统（清空已组卷题目记录）
 当用户说「重置组卷系统 / 清空已选题 / 回到未组卷状态」时，**删除所有 `selectN.json`**
@@ -391,9 +393,26 @@ python3 scripts/batch_papers.py --papers 3 --profile 数二轮换 --mix 基础�
 python3 scripts/batch_papers.py --papers 2 --seed-base 20260901 --no-pdf
 ```
 
-- 自动识别已有 `select*.json`（`select.json`=卷1，`select2.json`=卷2…），从下一卷续出
+- 自动识别已有 `select*.json`（`select1.json`、`select2.json`…），从下一卷续出
 - 每卷自动携带全部历史卷作 `--exclude`，且本轮新卷自动纳入下一轮排除
 - 参数透传：`--profile` / `--mix` / `--block` / `--max-proofs` / `--no-pdf`
+
+### S4.3 知识点选题（--topic）
+
+不想让系统全权选题时，可指定**知识点**及题数，具体抽哪道仍由系统决定：
+
+```bash
+# 先打知识点标签（一次性，生成 topic_tags.json，12 个主题）
+python3 scripts/tag_bank.py question_bank.json -o topic_tags.json
+
+# 卷子里要有 3 道极限 + 2 道特征值，其余按 profile 自动补齐（总题数不变）
+python3 scripts/pick_from_bank.py question_bank.json --profile 数二轮换 --mix 基础题:4 \
+    --topic 极限与连续:3 特征值与相似:2 --seed 20260920 --no 1 -o select1.json
+```
+
+- 主题清单见 `topic_tags.json`（极限与连续 / 一元微分 / 一元积分 / 多元微分 / 二重积分 / 微分方程 / 行列式 / 矩阵 / 向量组 / 线性方程组 / 特征值与相似 / 二次型），一题可命中多主题
+- topic 题自动避开已用/坏题，替换入卷的**同章同题型**题位（无则同题型卷末），不改变 22 题结构与分值
+- 主题不存在或题数不足时告警，不影响其余题位；`--tags` 可换标签文件
 
 ### S5 组卷：select → 试卷.tex
 

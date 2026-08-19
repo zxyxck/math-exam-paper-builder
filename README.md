@@ -109,6 +109,7 @@ sudo apt-get install -y python3 texlive-xetex texlive-lang-chinese
 │   ├── merge_banks.py           # S2 合并题库
 │   ├── bank_health.py           # S3 LaTeX 健康体检
 │   ├── pick_from_bank.py        # S4 按考纲抽题（PROFILES 在此配置）
+│   ├── tag_bank.py              # 知识点打标（--topic 用的标签文件）
 │   ├── batch_papers.py          # 一键批量组卷（自动排除已用题）
 │   ├── build_exam_tex.py        # S5/S6 组卷 + xelatex 编译
 │   ├── export_bank.py           # S7 人读题库导出
